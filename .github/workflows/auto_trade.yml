@@ -138,5 +138,5 @@ jobs:
           MODE="${{ github.event.inputs.mode || 'auto_trade' }}"
           TICKER="${{ github.event.inputs.ticker }}"
           LABEL="${TICKER:+ $TICKER}"
-          git commit -m "auto(${MODE}): シミュレーター更新${LABEL} $(date -u '+%Y-%m-%d %H:%M') UTC [skip ci]"
+          git commit -m "auto(${MODE}): シミュレーター更新${LABEL} $(date -u '+%Y-%m-%d %H:%M') UTC"
           git push

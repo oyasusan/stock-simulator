@@ -29,7 +29,7 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-.block-container { padding: 0.5rem 0.5rem 2rem; }
+.block-container { padding: 3rem 0.5rem 2rem; }
 [data-testid="stMetricValue"] { font-size: 1.1rem; }
 [data-testid="stMetricDelta"] { font-size: 0.8rem; }
 thead tr th { background: #1e1e2e !important; }
@@ -104,20 +104,40 @@ def _has_github_token() -> bool:
 
 # ── データ読み込み（data.db は READ-ONLY）────────────────────────────
 
+def _resolve_data_db() -> Path:
+    """data.db のパスを実行時に解決する（モジュール読み込み時の評価に依存しない）"""
+    base = Path(__file__).parent
+    local = base / "data.db"
+    if local.exists():
+        return local
+    fallback = base.parent / "finance-system" / "data.db"
+    return fallback
+
+
+def _resolve_watchlist() -> Path:
+    base = Path(__file__).parent
+    local = base / "watchlist.json"
+    if local.exists():
+        return local
+    return base.parent / "finance-system" / "watchlist.json"
+
+
 @st.cache_data(ttl=60)
 def load_watchlist() -> dict:
-    if not WATCHLIST_PATH.exists():
+    path = _resolve_watchlist()
+    if not path.exists():
         return {}
-    with open(WATCHLIST_PATH, encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         cfg = json.load(f)
     return {i["ticker"]: i for i in cfg["watchlist"]}
 
 
 @st.cache_data(ttl=60)
 def load_latest_quotes() -> pd.DataFrame:
-    if not DATA_DB_PATH.exists():
+    db = _resolve_data_db()
+    if not db.exists():
         return pd.DataFrame()
-    conn = sqlite3.connect(f"file:{DATA_DB_PATH}?mode=ro", uri=True)
+    conn = sqlite3.connect(str(db))
     df = pd.read_sql("""
         SELECT q.*
         FROM quotes q
