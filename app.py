@@ -4,7 +4,25 @@ import math
 import sqlite3
 import urllib.request
 import urllib.error
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+_JST = timezone(timedelta(hours=9))
+
+
+def to_jst(ts: str) -> str:
+    """UTC の ISO タイムスタンプ文字列を JST 表示文字列に変換する。
+    タイムゾーン情報がない場合は UTC として扱う。
+    """
+    if not ts:
+        return "-"
+    try:
+        dt = datetime.fromisoformat(ts)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(_JST).strftime("%Y-%m-%d %H:%M JST")
+    except Exception:
+        return ts
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -233,17 +251,20 @@ def render_dashboard(quote_map: dict):
         st.info("取引履歴がまだありません。手動で売買するか、自動売買を実行してください。")
         return
 
+    def _to_jst_series(series: pd.Series) -> pd.Series:
+        return pd.to_datetime(series, utc=True).dt.tz_convert(_JST)
+
     fig = go.Figure()
     if m_hist:
         m_df = pd.DataFrame(m_hist)
         fig.add_trace(go.Scatter(
-            x=m_df["recorded_at"], y=m_df["balance"],
+            x=_to_jst_series(m_df["recorded_at"]), y=m_df["balance"],
             name="手動口座", line=dict(color="#e74c3c", width=2),
         ))
     if a_hist:
         a_df = pd.DataFrame(a_hist)
         fig.add_trace(go.Scatter(
-            x=a_df["recorded_at"], y=a_df["balance"],
+            x=_to_jst_series(a_df["recorded_at"]), y=a_df["balance"],
             name="自動口座", line=dict(color="#3498db", width=2),
         ))
 
@@ -425,7 +446,7 @@ def render_positions(quote_map: dict, watchlist: dict):
                 "損益率":     f"{change_pct:+.1f}%" if change_pct is not None else "-",
                 "利確目標":   f"¥{tp_price:,.1f}" if tp_price else "-",
                 "損切ライン": f"¥{sl_price:,.1f}" if sl_price else "-",
-                "取得日時":   p["bought_at"],
+                "取得日時":   to_jst(p["bought_at"]),
             })
 
         df = pd.DataFrame(rows)
@@ -469,7 +490,7 @@ def render_history(watchlist: dict):
     rows = []
     for t in trades:
         rows.append({
-            "日時":   t["traded_at"],
+            "日時":   to_jst(t["traded_at"]),
             "口座":   "手動" if t["mode"] == "manual" else "自動",
             "銘柄":   watchlist.get(t["ticker"], {}).get("name", t["ticker"]),
             "コード": t["ticker"].replace(".T", ""),
@@ -505,7 +526,7 @@ watchlist  = load_watchlist()
 df_quotes  = load_latest_quotes()
 
 if not df_quotes.empty:
-    last_update = df_quotes["fetched_at"].max()
+    last_update = to_jst(df_quotes["fetched_at"].max())
     st.caption(f"株価最終更新: {last_update}  （15分ごと自動更新）")
 
 quote_map = (
