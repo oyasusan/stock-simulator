@@ -1,0 +1,142 @@
+name: Auto Trader Bot
+
+on:
+  # 平日 JST 9:00-15:45（UTC 0:00-6:45）を 15 分ごとにカバー
+  schedule:
+    - cron: '*/15 0-6 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '実行モード'
+        type: choice
+        options: [auto_trade, manual_buy, manual_sell]
+        default: auto_trade
+        required: true
+      ticker:
+        description: '銘柄コード (例: 4385.T)  ※manual_buy のみ'
+        type: string
+        default: ''
+      qty:
+        description: 'ロット数  ※manual_buy のみ'
+        type: number
+        default: 1
+      position_id:
+        description: 'ポジション ID  ※manual_sell のみ'
+        type: number
+        default: 0
+
+permissions:
+  contents: write
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ── data.db を finance-system リポジトリから取得 ──────────────────
+      - name: Download data.db from finance-system
+        env:
+          GH_TOKEN: ${{ secrets.GH_FINANCE_TOKEN }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, sys, json, base64, urllib.request, urllib.error
+
+          token = os.environ.get("GH_TOKEN", "")
+          repo  = "oyasusan/finance-system"
+          url   = f"https://api.github.com/repos/{repo}/contents/data.db"
+          headers = {"Accept": "application/vnd.github+json"}
+          if token:
+              headers["Authorization"] = f"Bearer {token}"
+
+          try:
+              req = urllib.request.Request(url, headers=headers)
+              with urllib.request.urlopen(req) as resp:
+                  data = json.loads(resp.read())
+              db_bytes = base64.b64decode(data["content"].replace("\n",""))
+              with open("data.db", "wb") as f:
+                  f.write(db_bytes)
+              print(f"data.db ダウンロード完了: {len(db_bytes):,} bytes")
+          except urllib.error.HTTPError as e:
+              print(f"data.db 取得失敗 (HTTP {e.code}): {e.reason}", file=sys.stderr)
+              if e.code == 404:
+                  print("リポジトリが非公開の場合は GH_FINANCE_TOKEN を設定してください", file=sys.stderr)
+              sys.exit(1)
+          PYEOF
+
+      # ── watchlist.json を finance-system リポジトリから取得 ────────────
+      - name: Download watchlist.json from finance-system
+        env:
+          GH_TOKEN: ${{ secrets.GH_FINANCE_TOKEN }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, sys, json, base64, urllib.request, urllib.error
+
+          token = os.environ.get("GH_TOKEN", "")
+          repo  = "oyasusan/finance-system"
+          url   = f"https://api.github.com/repos/{repo}/contents/watchlist.json"
+          headers = {"Accept": "application/vnd.github+json"}
+          if token:
+              headers["Authorization"] = f"Bearer {token}"
+
+          try:
+              req = urllib.request.Request(url, headers=headers)
+              with urllib.request.urlopen(req) as resp:
+                  data = json.loads(resp.read())
+              content = base64.b64decode(data["content"].replace("\n","")).decode()
+              with open("watchlist.json", "w", encoding="utf-8") as f:
+                  f.write(content)
+              print("watchlist.json ダウンロード完了")
+          except Exception as e:
+              print(f"watchlist.json 取得スキップ: {e}", file=sys.stderr)
+          PYEOF
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 自動売買 ─────────────────────────────────────────────────────
+      - name: Run auto trader
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.mode == 'auto_trade' }}
+        run: python auto_trader.py
+
+      # ── 手動買い ─────────────────────────────────────────────────────
+      - name: Execute manual buy
+        if: ${{ github.event.inputs.mode == 'manual_buy' }}
+        env:
+          TICKER: ${{ github.event.inputs.ticker }}
+          QTY:    ${{ github.event.inputs.qty }}
+        run: python manual_trade.py buy "$TICKER" "$QTY"
+
+      # ── 手動売り ─────────────────────────────────────────────────────
+      - name: Execute manual sell
+        if: ${{ github.event.inputs.mode == 'manual_sell' }}
+        env:
+          POSITION_ID: ${{ github.event.inputs.position_id }}
+        run: python manual_trade.py sell "$POSITION_ID"
+
+      # ── コミット＆プッシュ ───────────────────────────────────────────
+      - name: Commit and push
+        run: |
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name  "github-actions[bot]"
+          git add simulator.db data.db watchlist.json
+          if git diff --staged --quiet; then
+            echo "変更なし、スキップ"
+            exit 0
+          fi
+          MODE="${{ github.event.inputs.mode || 'auto_trade' }}"
+          TICKER="${{ github.event.inputs.ticker }}"
+          LABEL="${TICKER:+ $TICKER}"
+          git commit -m "auto(${MODE}): シミュレーター更新${LABEL} $(date -u '+%Y-%m-%d %H:%M') UTC [skip ci]"
+          git push

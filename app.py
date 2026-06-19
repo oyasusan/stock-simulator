@@ -2,13 +2,18 @@
 import json
 import math
 import sqlite3
+import urllib.request
+import urllib.error
 from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from config import DATA_DB_PATH, WATCHLIST_PATH, LOT_SIZE, TAKE_PROFIT_RATE, STOP_LOSS_RATE
+from config import (
+    DATA_DB_PATH, WATCHLIST_PATH, LOT_SIZE, TAKE_PROFIT_RATE, STOP_LOSS_RATE,
+    GITHUB_REPO, GITHUB_WORKFLOW, GITHUB_BRANCH,
+)
 from simulator_db import (
     init_db, get_wallet, get_positions, get_trade_history, get_wallet_history,
     execute_buy, execute_sell, reset_account,
@@ -40,6 +45,62 @@ thead tr th { background: #1e1e2e !important; }
 
 # ── 初期化 ────────────────────────────────────────────────────────────
 init_db()
+
+# ── GitHub workflow dispatch（手動売買の永続化）──────────────────────
+
+def _github_token() -> str:
+    """Streamlit secrets から GitHub トークンを取得"""
+    try:
+        return st.secrets.get("GITHUB_TOKEN", "")
+    except Exception:
+        return ""
+
+
+def dispatch_trade(mode: str, ticker: str = "", qty: int = 1, position_id: int = 0) -> bool:
+    """GitHub Actions workflow_dispatch で手動売買を予約する。
+
+    Streamlit secrets に GITHUB_TOKEN（workflow スコープ必須）が必要。
+    約60-120秒後にトレードが実行され simulator.db がコミットされる。
+    """
+    import json as _json
+    token = _github_token()
+    if not token:
+        return False
+
+    url = (
+        f"https://api.github.com/repos/{GITHUB_REPO}"
+        f"/actions/workflows/{GITHUB_WORKFLOW}/dispatches"
+    )
+    payload = _json.dumps({
+        "ref": GITHUB_BRANCH,
+        "inputs": {
+            "mode":        mode,
+            "ticker":      ticker,
+            "qty":         str(qty),
+            "position_id": str(position_id),
+        },
+    }).encode()
+
+    req = urllib.request.Request(
+        url, data=payload, method="POST",
+        headers={
+            "Authorization":        f"Bearer {token}",
+            "Accept":               "application/vnd.github+json",
+            "Content-Type":         "application/json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return resp.status == 204
+    except urllib.error.HTTPError as e:
+        st.error(f"GitHub API エラー: HTTP {e.code} — トークンの権限を確認してください")
+        return False
+
+
+def _has_github_token() -> bool:
+    return bool(_github_token())
+
 
 # ── データ読み込み（data.db は READ-ONLY）────────────────────────────
 
@@ -198,7 +259,21 @@ def render_manual_trade(df_quotes: pd.DataFrame, watchlist: dict):
     positions = get_positions("manual")
     held = {p["ticker"]: p for p in positions}
 
+    has_token = _has_github_token()
+
+    # Streamlit Cloud では workflow dispatch 経由でトレード実行
+    # ローカル開発では直接 DB に書き込む
+    is_cloud = has_token
+
     st.subheader(f"手動口座  残高: ¥{balance:,.0f}")
+
+    if not has_token:
+        st.info(
+            "**ローカルモード**: トレードは即時実行されます。\n\n"
+            "Streamlit Cloud で利用する場合は Secrets に `GITHUB_TOKEN` を設定してください。"
+        )
+    else:
+        st.caption("注文は GitHub Actions 経由で実行されます（反映まで約1〜2分）")
 
     if df_quotes.empty:
         st.warning("株価データがありません。")
@@ -226,10 +301,10 @@ def render_manual_trade(df_quotes: pd.DataFrame, watchlist: dict):
 
     st.markdown("---")
 
-    # 買いフォーム
     max_qty = int(balance // LOT_SIZE)
     col_buy, col_sell = st.columns(2)
 
+    # ── 買い注文 ───────────────────────────────────────────────────────
     with col_buy:
         st.markdown("#### 買い注文")
         qty_buy = st.number_input(
@@ -239,16 +314,28 @@ def render_manual_trade(df_quotes: pd.DataFrame, watchlist: dict):
         )
         cost = qty_buy * LOT_SIZE
         st.caption(f"コスト: ¥{cost:,.0f}  /  残高: ¥{balance:,.0f}")
+
         if st.button(f"🔴 買い {sel_ticker.replace('.T','')}", key="btn_buy",
                      disabled=(max_qty < 1)):
-            ok, msg = execute_buy("manual", sel_ticker, price, qty_buy)
-            if ok:
-                st.success(msg)
+            if is_cloud:
+                ok = dispatch_trade("manual_buy", ticker=sel_ticker, qty=qty_buy)
+                if ok:
+                    st.success(
+                        f"注文受付: {sel_ticker} {qty_buy}ロット — "
+                        "約1〜2分後に GitHub Actions が実行します。"
+                        "反映後にページを更新してください。"
+                    )
+                # エラーは dispatch_trade 内で表示済み
             else:
-                st.error(msg)
-            st.cache_data.clear()
-            st.rerun()
+                ok, msg = execute_buy("manual", sel_ticker, price, qty_buy)
+                if ok:
+                    st.success(msg)
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error(msg)
 
+    # ── 売り注文 ───────────────────────────────────────────────────────
     with col_sell:
         st.markdown("#### 売り注文")
         if sel_ticker in held:
@@ -260,13 +347,21 @@ def render_manual_trade(df_quotes: pd.DataFrame, watchlist: dict):
                 f"含み損益: {fmt_pnl(unrealized)}  ({change_pct:+.1f}%)"
             )
             if st.button(f"🔵 売り {sel_ticker.replace('.T','')}", key="btn_sell"):
-                pnl, msg = execute_sell("manual", pos["id"], price)
-                if pnl is not None:
-                    st.success(msg)
+                if is_cloud:
+                    ok = dispatch_trade("manual_sell", position_id=pos["id"])
+                    if ok:
+                        st.success(
+                            f"売り注文受付: {sel_ticker} — "
+                            "約1〜2分後に GitHub Actions が実行します。"
+                        )
                 else:
-                    st.error(msg)
-                st.cache_data.clear()
-                st.rerun()
+                    pnl, msg = execute_sell("manual", pos["id"], price)
+                    if pnl is not None:
+                        st.success(msg)
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error(msg)
         else:
             st.caption("この銘柄は保有していません")
             st.button("🔵 売り（保有なし）", key="btn_sell_na", disabled=True)
@@ -319,19 +414,25 @@ def render_positions(quote_map: dict, watchlist: dict):
         # 手動口座のみ: 個別売却ボタン
         if mode == "manual":
             st.markdown("**手動売却**")
+            is_cloud = _has_github_token()
             for p in positions:
                 q = quote_map.get(p["ticker"], {})
                 current = q.get("price")
                 name = watchlist.get(p["ticker"], {}).get("name", p["ticker"])
                 btn_label = f"売却: {name}  @ ¥{current:,.1f}" if current else f"売却: {name}（価格取得不可）"
                 if st.button(btn_label, key=f"sell_pos_{p['id']}", disabled=not current):
-                    pnl, msg = execute_sell("manual", p["id"], current)
-                    if pnl is not None:
-                        st.success(msg)
+                    if is_cloud:
+                        ok = dispatch_trade("manual_sell", position_id=p["id"])
+                        if ok:
+                            st.success(f"売り注文受付: {name} — 約1〜2分後に実行されます")
                     else:
-                        st.error(msg)
-                    st.cache_data.clear()
-                    st.rerun()
+                        pnl, msg = execute_sell("manual", p["id"], current)
+                        if pnl is not None:
+                            st.success(msg)
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error(msg)
 
 
 # ── Tab4: 取引履歴 ────────────────────────────────────────────────────

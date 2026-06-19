@@ -1,6 +1,9 @@
-simulator.db
+# simulator.db と data.db はリポジトリで追跡（GitHub Actions が更新・コミット）
+# ローカル開発中に発生する WAL ファイルのみ除外
 simulator.db-shm
 simulator.db-wal
+data.db-shm
+data.db-wal
 __pycache__/
 *.pyc
 .venv/
