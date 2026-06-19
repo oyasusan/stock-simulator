@@ -329,7 +329,7 @@ def render_manual_trade(df_quotes: pd.DataFrame, watchlist: dict):
         st.markdown("#### 買い注文")
         qty_buy = st.number_input(
             "ロット数（1ロット=¥1,000）", min_value=1,
-            max_value=max(1, max_qty), value=min(1, max_qty),
+            max_value=max(1, max_qty), value=1,
             step=1, key="buy_qty",
         )
         cost = qty_buy * LOT_SIZE
