@@ -1,0 +1,7 @@
+simulator.db
+simulator.db-shm
+simulator.db-wal
+__pycache__/
+*.pyc
+.venv/
+*.env
