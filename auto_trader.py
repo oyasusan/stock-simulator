@@ -9,12 +9,10 @@ data.db からシグナル・株価を読み込み（READ-ONLY）、
 simulator.db の自動口座で売買を実行する。
 """
 import sqlite3
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from config import DATA_DB_PATH, BUY_SIGNALS, TAKE_PROFIT_RATE, STOP_LOSS_RATE
-
-_JST = timezone(timedelta(hours=9))
 from simulator_db import init_db, get_positions, get_wallet, execute_buy, execute_sell
 
 
@@ -44,8 +42,8 @@ def run():
         return
 
     quote_map = {q["ticker"]: q for q in quotes}
-    now_jst = datetime.now(_JST).strftime("%Y-%m-%d %H:%M:%S JST")
-    print(f"[auto_trader] {now_jst}  対象銘柄: {len(quotes)}")
+    print(f"[auto_trader] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  "
+          f"対象銘柄: {len(quotes)}")
 
     # ── 1. 既存ポジションの TP / SL チェック ─────────────────────────
     for pos in get_positions("auto"):

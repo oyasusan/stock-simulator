@@ -1,6 +1,6 @@
 """simulator.db の初期化・接続・CRUD モジュール"""
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 from config import SIM_DB_PATH, INITIAL_BALANCE, LOT_SIZE
@@ -81,8 +81,7 @@ def init_db():
 
 
 def _now() -> str:
-    """UTC タイムスタンプを返す（表示時に JST 変換）"""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    return datetime.now().isoformat(timespec="seconds")
 
 
 # ── 読み取り ─────────────────────────────────────────────────────────
