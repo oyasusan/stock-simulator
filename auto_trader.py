@@ -14,6 +14,7 @@ from pathlib import Path
 
 from config import DATA_DB_PATH, BUY_SIGNALS, TAKE_PROFIT_RATE, STOP_LOSS_RATE
 from simulator_db import init_db, get_positions, get_wallet, execute_buy, execute_sell
+from notifier import notify_trade
 
 
 def load_latest_quotes() -> list[dict]:
@@ -56,9 +57,13 @@ def run():
         if change >= TAKE_PROFIT_RATE:
             pnl, msg = execute_sell("auto", pos["id"], current)
             print(f"  [利確] {pos['ticker']}  {change*100:+.1f}%  {msg}")
+            new_balance = get_wallet("auto").get("balance")
+            notify_trade("sell_tp", "auto", pos["ticker"], current, pos["qty"], pnl, new_balance)
         elif change <= STOP_LOSS_RATE:
             pnl, msg = execute_sell("auto", pos["id"], current)
             print(f"  [損切] {pos['ticker']}  {change*100:+.1f}%  {msg}")
+            new_balance = get_wallet("auto").get("balance")
+            notify_trade("sell_sl", "auto", pos["ticker"], current, pos["qty"], pnl, new_balance)
 
     # ── 2. 買いシグナルのエントリー ──────────────────────────────────
     # TP/SL 後の最新残高・保有銘柄を取得
@@ -89,6 +94,7 @@ def run():
             print(f"  [買い] {msg}")
             balance      -= qty * 1000
             held_tickers.add(ticker)
+            notify_trade("buy", "auto", ticker, price, qty, balance=balance)
 
     print("[auto_trader] 完了")
 

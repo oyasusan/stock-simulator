@@ -11,7 +11,8 @@ import sqlite3
 from pathlib import Path
 
 from config import DATA_DB_PATH
-from simulator_db import init_db, get_positions, execute_buy, execute_sell
+from simulator_db import init_db, get_positions, get_wallet, execute_buy, execute_sell
+from notifier import notify_trade
 
 
 def get_current_price(ticker: str) -> float | None:
@@ -42,6 +43,8 @@ def cmd_buy(ticker: str, qty: int):
     print(f"[manual_trade] {msg}")
     if not ok:
         sys.exit(1)
+    new_balance = get_wallet("manual").get("balance")
+    notify_trade("buy", "manual", ticker, price, qty, balance=new_balance)
 
 
 def cmd_sell(position_id: int):
@@ -60,6 +63,8 @@ def cmd_sell(position_id: int):
     print(f"[manual_trade] {msg}")
     if pnl is None:
         sys.exit(1)
+    new_balance = get_wallet("manual").get("balance")
+    notify_trade("sell_manual", "manual", pos["ticker"], price, pos["qty"], pnl, new_balance)
 
 
 def main():
