@@ -12,6 +12,7 @@ import streamlit as st
 
 from config import (
     DATA_DB_PATH, WATCHLIST_PATH, LOT_SIZE, TAKE_PROFIT_RATE, STOP_LOSS_RATE,
+    MANUAL_INITIAL_BALANCE, AUTO_INITIAL_BALANCE, AUTO_MAX_BUY_PER_TRADE,
     GITHUB_REPO, GITHUB_WORKFLOW, GITHUB_BRANCH,
 )
 from simulator_db import (
@@ -94,7 +95,12 @@ def dispatch_trade(mode: str, ticker: str = "", qty: int = 1, position_id: int =
         with urllib.request.urlopen(req) as resp:
             return resp.status == 204
     except urllib.error.HTTPError as e:
-        st.error(f"GitHub API エラー: HTTP {e.code} — トークンの権限を確認してください")
+        if e.code == 401:
+            st.error("GitHub API エラー: HTTP 401 — トークンが無効または期限切れです。Secrets の GITHUB_TOKEN を更新してください。")
+        elif e.code == 403:
+            st.error("GitHub API エラー: HTTP 403 — トークンに権限がありません。Classic PAT は `workflow` スコープ、Fine-grained PAT は Actions を Read and write に設定してください。")
+        else:
+            st.error(f"GitHub API エラー: HTTP {e.code} — {e.reason}")
         return False
 
 
@@ -205,9 +211,8 @@ def render_wallet_summary(quote_map: dict):
 
     m_total = m_wallet["balance"] + sum(p["qty"] * LOT_SIZE for p in m_positions)
     a_total = a_wallet["balance"] + sum(p["qty"] * LOT_SIZE for p in a_positions)
-    from config import INITIAL_BALANCE
-    m_pnl = m_total + m_unrealized - INITIAL_BALANCE
-    a_pnl = a_total + a_unrealized - INITIAL_BALANCE
+    m_pnl = m_total + m_unrealized - MANUAL_INITIAL_BALANCE
+    a_pnl = a_total + a_unrealized - AUTO_INITIAL_BALANCE
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("手動 残高", f"¥{m_wallet['balance']:,.0f}",
@@ -247,12 +252,17 @@ def render_dashboard(quote_map: dict):
             name="自動口座", line=dict(color="#3498db", width=2),
         ))
 
-    from config import INITIAL_BALANCE
     fig.add_hline(
-        y=INITIAL_BALANCE,
-        line_dash="dash", line_color="rgba(255,255,255,0.3)",
-        annotation_text=f"初期 ¥{INITIAL_BALANCE:.0f}",
+        y=MANUAL_INITIAL_BALANCE,
+        line_dash="dash", line_color="rgba(255,100,100,0.4)",
+        annotation_text=f"手動初期 ¥{MANUAL_INITIAL_BALANCE:.0f}",
     )
+    if AUTO_INITIAL_BALANCE != MANUAL_INITIAL_BALANCE:
+        fig.add_hline(
+            y=AUTO_INITIAL_BALANCE,
+            line_dash="dash", line_color="rgba(100,150,255,0.4)",
+            annotation_text=f"自動初期 ¥{AUTO_INITIAL_BALANCE:.0f}",
+        )
     fig.update_layout(
         paper_bgcolor="#1a1a2e", plot_bgcolor="#0f0f1e",
         font=dict(color="#cccccc"),
@@ -556,6 +566,7 @@ with st.sidebar:
     st.markdown("**自動売買ルール**")
     st.markdown(
         f"- 買い: 強買/買いシグナル\n"
+        f"- 1回上限: ¥{AUTO_MAX_BUY_PER_TRADE:,.0f}（銘柄分散）\n"
         f"- 利確: +{TAKE_PROFIT_RATE*100:.0f}%\n"
         f"- 損切: {STOP_LOSS_RATE*100:.0f}%\n"
         f"- 単位: ¥{LOT_SIZE:,.0f}/ロット"

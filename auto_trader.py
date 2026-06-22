@@ -12,7 +12,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from config import DATA_DB_PATH, BUY_SIGNALS, TAKE_PROFIT_RATE, STOP_LOSS_RATE
+from config import DATA_DB_PATH, BUY_SIGNALS, TAKE_PROFIT_RATE, STOP_LOSS_RATE, LOT_SIZE, AUTO_MAX_BUY_PER_TRADE
 from simulator_db import init_db, get_positions, get_wallet, execute_buy, execute_sell
 from notifier import notify_trade
 
@@ -84,7 +84,8 @@ def run():
         if not price or ticker in held_tickers:
             continue
 
-        qty = int(balance // 1000)
+        max_qty = int(AUTO_MAX_BUY_PER_TRADE // LOT_SIZE)
+        qty = min(int(balance // LOT_SIZE), max_qty)
         if qty < 1:
             print(f"  [残高不足] {ticker} スキップ  残高: ¥{balance:.0f}")
             break
@@ -92,7 +93,7 @@ def run():
         ok, msg = execute_buy("auto", ticker, price, qty)
         if ok:
             print(f"  [買い] {msg}")
-            balance      -= qty * 1000
+            balance      -= qty * LOT_SIZE
             held_tickers.add(ticker)
             notify_trade("buy", "auto", ticker, price, qty, balance=balance)
 

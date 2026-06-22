@@ -21,7 +21,9 @@ WATCHLIST_PATH     = _LOCAL_WATCHLIST if _LOCAL_WATCHLIST.exists() else _FINANCE
 SIM_DB_PATH     = _BASE / "simulator.db"
 
 # トレード設定
-INITIAL_BALANCE  = 1000.0   # 初期資産（円）
+MANUAL_INITIAL_BALANCE  = 5000.0   # 手動口座 初期資産（円）
+AUTO_INITIAL_BALANCE    = 5000.0   # 自動口座 初期資産（円）
+AUTO_MAX_BUY_PER_TRADE  = 1000.0   # 自動売買 1回の購入上限（円）— 銘柄分散のため
 LOT_SIZE         = 1000.0   # 1ロット = 1,000円
 TAKE_PROFIT_RATE = 0.05     # 利益確定 +5%
 STOP_LOSS_RATE   = -0.03    # 損切り   -3%

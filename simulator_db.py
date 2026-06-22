@@ -3,7 +3,9 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from config import SIM_DB_PATH, INITIAL_BALANCE, LOT_SIZE
+from config import SIM_DB_PATH, MANUAL_INITIAL_BALANCE, AUTO_INITIAL_BALANCE, LOT_SIZE
+
+_INITIAL_BALANCE = {"manual": MANUAL_INITIAL_BALANCE, "auto": AUTO_INITIAL_BALANCE}
 
 
 def _conn() -> sqlite3.Connection:
@@ -59,11 +61,11 @@ def init_db():
         now = _now()
         conn.execute(
             "INSERT OR IGNORE INTO wallets (id, mode, balance, updated_at) VALUES (1, 'manual', ?, ?)",
-            (INITIAL_BALANCE, now),
+            (MANUAL_INITIAL_BALANCE, now),
         )
         conn.execute(
             "INSERT OR IGNORE INTO wallets (id, mode, balance, updated_at) VALUES (2, 'auto', ?, ?)",
-            (INITIAL_BALANCE, now),
+            (AUTO_INITIAL_BALANCE, now),
         )
         # 初期残高を wallet_history に記録（初回のみ）
         for mode in ("manual", "auto"):
@@ -73,7 +75,7 @@ def init_db():
             if cnt == 0:
                 conn.execute(
                     "INSERT INTO wallet_history (mode, balance, recorded_at) VALUES (?,?,?)",
-                    (mode, INITIAL_BALANCE, now),
+                    (mode, _INITIAL_BALANCE[mode], now),
                 )
         conn.commit()
     finally:
@@ -90,7 +92,7 @@ def get_wallet(mode: str) -> dict:
     init_db()
     with _conn() as conn:
         row = conn.execute("SELECT * FROM wallets WHERE mode = ?", (mode,)).fetchone()
-    return dict(row) if row else {"mode": mode, "balance": INITIAL_BALANCE}
+    return dict(row) if row else {"mode": mode, "balance": _INITIAL_BALANCE.get(mode, 0.0)}
 
 
 def get_positions(mode: str) -> list[dict]:
@@ -209,11 +211,12 @@ def reset_account(mode: str):
         conn.execute("DELETE FROM positions    WHERE mode = ?", (mode,))
         conn.execute("DELETE FROM trade_history WHERE mode = ?", (mode,))
         conn.execute("DELETE FROM wallet_history WHERE mode = ?", (mode,))
+        initial = _INITIAL_BALANCE[mode]
         conn.execute(
             "UPDATE wallets SET balance = ?, updated_at = ? WHERE mode = ?",
-            (INITIAL_BALANCE, now, mode),
+            (initial, now, mode),
         )
         conn.execute(
             "INSERT INTO wallet_history (mode, balance, recorded_at) VALUES (?,?,?)",
-            (mode, INITIAL_BALANCE, now),
+            (mode, initial, now),
         )
