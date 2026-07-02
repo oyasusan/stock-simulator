@@ -53,22 +53,34 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_FINANCE_TOKEN }}
         run: |
           python3 - <<'PYEOF'
-          import os, sys, json, base64, urllib.request, urllib.error
+          import os, sys, json, base64, urllib.request, urllib.error, sqlite3, subprocess, shutil
 
           token = os.environ.get("GH_TOKEN", "")
           repo  = "oyasusan/finance-system"
-          url   = f"https://api.github.com/repos/{repo}/contents/data.db"
 
-          def fetch(with_token: bool) -> bytes:
-              headers = {"Accept": "application/vnd.github+json"}
-              if with_token and token:
-                  headers["Authorization"] = f"Bearer {token}"
-              req = urllib.request.Request(url, headers=headers)
+          def auth_headers() -> dict:
+              h = {"Accept": "application/vnd.github+json"}
+              if token:
+                  h["Authorization"] = f"Bearer {token}"
+              return h
+
+          def fetch_via_contents_api() -> bytes:
+              """1MB未満のファイル向け: Contents API (base64)"""
+              url = f"https://api.github.com/repos/{repo}/contents/data.db"
+              req = urllib.request.Request(url, headers=auth_headers())
               with urllib.request.urlopen(req) as resp:
                   data = json.loads(resp.read())
-              return base64.b64decode(data["content"].replace("\n", ""))
+              content = data.get("content")
+              if not content:
+                  raise ValueError("content が空です（ファイルが 1MB 超の可能性）")
+              return base64.b64decode(content.replace("\n", ""))
 
-          import sqlite3, subprocess
+          def fetch_via_raw_url() -> bytes:
+              """1MB超のファイル向け: raw URL から直接ダウンロード"""
+              url = f"https://raw.githubusercontent.com/{repo}/main/data.db"
+              req = urllib.request.Request(url, headers=auth_headers())
+              with urllib.request.urlopen(req) as resp:
+                  return resp.read()
 
           def validate_db(path: str) -> bool:
               try:
@@ -79,40 +91,34 @@ jobs:
               except Exception:
                   return False
 
+          def restore_committed():
+              print("コミット済みの data.db を使用します", file=sys.stderr)
+              subprocess.run(["git", "checkout", "HEAD", "--", "data.db"], check=True)
+
           try:
               try:
-                  db_bytes = fetch(with_token=True)
-              except urllib.error.HTTPError as e:
-                  if e.code == 401 and token:
-                      # トークンが無効な場合は認証なし（public リポジトリ）で再試行
-                      print(f"トークン認証失敗 (401)、認証なしで再試行します", file=sys.stderr)
-                      db_bytes = fetch(with_token=False)
-                  else:
-                      raise
+                  db_bytes = fetch_via_contents_api()
+                  print(f"Contents API でダウンロード完了: {len(db_bytes):,} bytes")
+              except (urllib.error.HTTPError, ValueError) as e:
+                  print(f"Contents API 失敗 ({e})、Raw URL で再試行します", file=sys.stderr)
+                  db_bytes = fetch_via_raw_url()
+                  print(f"Raw URL でダウンロード完了: {len(db_bytes):,} bytes")
 
               tmp_path = "data_downloaded.db"
               with open(tmp_path, "wb") as f:
                   f.write(db_bytes)
-              print(f"data.db ダウンロード完了: {len(db_bytes):,} bytes")
 
               if validate_db(tmp_path):
-                  import shutil
                   shutil.move(tmp_path, "data.db")
                   print("data.db 検証OK: quotes テーブルを確認")
               else:
-                  import os
                   os.remove(tmp_path)
-                  print("data.db 検証失敗: quotes テーブルが見つかりません。コミット済みファイルを使用します", file=sys.stderr)
-                  subprocess.run(["git", "checkout", "HEAD", "--", "data.db"], check=True)
+                  print("data.db 検証失敗: quotes テーブルが見つかりません", file=sys.stderr)
+                  restore_committed()
 
-          except urllib.error.HTTPError as e:
-              print(f"data.db 取得失敗 (HTTP {e.code}): {e.reason}", file=sys.stderr)
-              if e.code == 404:
-                  print("リポジトリが非公開の場合は GH_FINANCE_TOKEN を設定してください", file=sys.stderr)
-              elif e.code == 401:
-                  print("トークンが無効または期限切れです。GH_FINANCE_TOKEN を更新してください", file=sys.stderr)
-              print("コミット済みの data.db を使用します", file=sys.stderr)
-              subprocess.run(["git", "checkout", "HEAD", "--", "data.db"], check=True)
+          except Exception as e:
+              print(f"data.db 取得失敗: {e}", file=sys.stderr)
+              restore_committed()
           PYEOF
 
       # ── watchlist.json を finance-system リポジトリから取得 ────────────
