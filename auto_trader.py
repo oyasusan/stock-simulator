@@ -24,14 +24,19 @@ def load_latest_quotes() -> list[dict]:
         return []
     conn = sqlite3.connect(f"file:{DATA_DB_PATH}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
-    rows = conn.execute("""
-        SELECT q.*
-        FROM quotes q
-        INNER JOIN (
-            SELECT ticker, MAX(fetched_at) AS max_time
-            FROM quotes GROUP BY ticker
-        ) t ON q.ticker = t.ticker AND q.fetched_at = t.max_time
-    """).fetchall()
+    try:
+        rows = conn.execute("""
+            SELECT q.*
+            FROM quotes q
+            INNER JOIN (
+                SELECT ticker, MAX(fetched_at) AS max_time
+                FROM quotes GROUP BY ticker
+            ) t ON q.ticker = t.ticker AND q.fetched_at = t.max_time
+        """).fetchall()
+    except sqlite3.OperationalError as e:
+        print(f"[auto_trader] data.db に quotes テーブルが存在しません: {e}")
+        conn.close()
+        return []
     conn.close()
     return [dict(r) for r in rows]
 

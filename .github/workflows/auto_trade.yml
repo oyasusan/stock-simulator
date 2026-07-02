@@ -68,6 +68,17 @@ jobs:
                   data = json.loads(resp.read())
               return base64.b64decode(data["content"].replace("\n", ""))
 
+          import sqlite3, subprocess
+
+          def validate_db(path: str) -> bool:
+              try:
+                  conn = sqlite3.connect(path)
+                  count = conn.execute("SELECT COUNT(*) FROM quotes").fetchone()[0]
+                  conn.close()
+                  return count > 0
+              except Exception:
+                  return False
+
           try:
               try:
                   db_bytes = fetch(with_token=True)
@@ -78,16 +89,30 @@ jobs:
                       db_bytes = fetch(with_token=False)
                   else:
                       raise
-              with open("data.db", "wb") as f:
+
+              tmp_path = "data_downloaded.db"
+              with open(tmp_path, "wb") as f:
                   f.write(db_bytes)
               print(f"data.db ダウンロード完了: {len(db_bytes):,} bytes")
+
+              if validate_db(tmp_path):
+                  import shutil
+                  shutil.move(tmp_path, "data.db")
+                  print("data.db 検証OK: quotes テーブルを確認")
+              else:
+                  import os
+                  os.remove(tmp_path)
+                  print("data.db 検証失敗: quotes テーブルが見つかりません。コミット済みファイルを使用します", file=sys.stderr)
+                  subprocess.run(["git", "checkout", "HEAD", "--", "data.db"], check=True)
+
           except urllib.error.HTTPError as e:
               print(f"data.db 取得失敗 (HTTP {e.code}): {e.reason}", file=sys.stderr)
               if e.code == 404:
                   print("リポジトリが非公開の場合は GH_FINANCE_TOKEN を設定してください", file=sys.stderr)
               elif e.code == 401:
                   print("トークンが無効または期限切れです。GH_FINANCE_TOKEN を更新してください", file=sys.stderr)
-              sys.exit(1)
+              print("コミット済みの data.db を使用します", file=sys.stderr)
+              subprocess.run(["git", "checkout", "HEAD", "--", "data.db"], check=True)
           PYEOF
 
       # ── watchlist.json を finance-system リポジトリから取得 ────────────
